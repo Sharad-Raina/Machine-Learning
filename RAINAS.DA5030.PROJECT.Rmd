@@ -1,0 +1,1679 @@
+---
+title: "An Ensemble Model to Predict the Length of Stay"
+author: "Sharad Raina"
+subtitle : "DA5030"
+date: "Summer 2024"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+# Introduction 
+Accurately predicting the length of stay (LOS) for patients in a healthcare facility is crucial for optimizing resource management, improving patient care, and ensuring operational efficiency. In modern healthcare, the ability to foresee a patient's length of stay based on various health metrics allows hospitals to better allocate beds, schedule procedures, manage staff, and plan discharges effectively.
+
+This project aims to develop predictive models that estimate the length of stay for patients using a range of healthcare measures, including re-admission counts, glucose levels, kidney function, and other relevant health indicators. By analyzing these variables, we can identify patterns and correlations that influence a patient's duration in the hospital, thereby providing insights that can help in decision-making processes.
+
+The primary goal is to create a reliable prediction model that can assist healthcare providers in anticipating the needs of their patients more accurately, ultimately leading to better healthcare outcomes and more efficient use of hospital resources. 
+
+
+# Project Approach 
+This project has been created in 3 iterations to assess the isolated impact of each iteration on model results. The models created are Linear Regression, Random Forest and Gradient Boosting.
+
+The 1st iteration is done with minimal data prep and seeing model performance through R square and RMSE. In 2nd iteration extensive data prep is done and the above parameters are used to compare results. In the last iteration PCA has been performed on the dataset and the new components obtained have been used in model training and evaluation. Again the results are obtained using same metrics and analysis is done to assess individual impact of PCA on the model performance and its comparison with above 2 iterations. 
+
+There is also creation of an ensemble model that combines the predictive power of the 3 best models I got and averages them to predict the length of stay of a patient. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 1st Iteration
+
+
+```{r Loading_Libraries ,  message=FALSE , warning=FALSE , echo=FALSE}
+
+# Loading necessary libraries
+
+library(tidyverse)
+
+library(caret)
+
+library(klaR)
+
+library(C50)
+
+library(stringr)
+
+library(psych)
+
+library(corrplot)
+
+
+```
+
+### Data Acquisition
+
+
+#### Loading CSV
+```{r Loading CSV }
+
+# Getting URL
+url = "https://drive.google.com/uc?export=download&id=14NC3dUvpv0UZx-hBox1UDvJ91ktfgpFE"
+
+
+# Creating dataset
+length_of_stay = read.csv(url)
+
+# First 6 observations
+# head(length_of_stay)
+
+
+# Creating copy to be used later
+length_of_stay_copy = length_of_stay
+
+```
+
+
+
+
+### Data Exploration
+```{r Structure , comment= " "}
+ 
+# Getting structure of data
+str(length_of_stay)
+
+
+```
+
+- The dataset consists of ***`r nrow(length_of_stay)` rows*** and ***`r ncol(length_of_stay)` columns***.
+- The **vdate , discharged** column store ***dates in character*** format hence, data prep required here.
+- **rcount** variable records no. of **re-admissions** patient had and is present in **character format**, requires further investigation.
+- Most of the data is in numerical format but looking at columns like **sodium, glucose, creatinine**, scaling is a requirement.
+- **eid** column as per data dictionary is an index number hence not adding any information and would be removed.
+
+
+```{r Summary}
+
+# Summary of the data in terms of mean,median etc.
+summary( length_of_stay )
+
+
+```
+- **secondarydiagnosisnonicd9** and **neutrophils** column has noticebale difference in mean and median hence,can be due to outliers or high values recorded. Such distribution is expected to not give a bell shaped - curve which is explored further.
+- No NA values are seen in the dataset.
+- **Glucose** columns records minimum value of -1 which can be considered as an error and would get treated during outliers treatment.
+
+
+
+#### No NA values
+```{r NA_Values}
+
+# Checking for NA values
+#colSums(is.na(length_of_stay))
+
+
+# 0 NA values
+sum(is.na(length_of_stay))
+
+```
+
+#### Char to Date
+```{r vdate_date}
+
+# Converting date to appropriate format
+length_of_stay$vdate =  as.Date( length_of_stay$vdate  , format = "%m/%d/%Y" )
+
+
+length_of_stay$discharged = as.Date( length_of_stay$discharged , format = "%m/%d/%Y" )
+
+
+```
+
+
+
+#### Char to Int
+```{r rcount_int}
+
+# Distribution of re-admission variable
+prop.table(table(length_of_stay$rcount))*100
+
+# Converting to numeric
+length_of_stay$rcount = as.numeric(stringr::str_replace_all( length_of_stay$rcount , pattern = "\\+" , replacement = "" ) ) 
+
+
+
+
+```
+
+
+- ***re-admission*** column records the no. of **previous re-admissions** the patient had within last 180 days and since this feature can have a **major impact** on deciding length of stay ( target variable ), its relationship is investigated below.  
+
+- Keeping it as **numeric** helps in **limiting** the excess **dummy** columns that would be created but would make no sense if there is no **ordinal nature** to this data and there is no linear relationship with target variable.
+
+- If **no linear relationship** can be seen then, its better to convert it to **factor** and see there individual impact.
+
+- More than **55 %** of patients in the dataset have had ***0 previous re-admissions***.
+
+
+
+
+
+#### Deciding whether to keep it as factor or numeric
+```{r}
+# Loading library
+library(dplyr)
+
+
+# Loading library
+library(ggplot2)
+
+# Avg length of stay for each re-admssion count
+avg_los = length_of_stay %>%
+  
+  group_by(rcount) %>%
+  
+  summarise(avg_lengthofstay = round(mean(lengthofstay, na.rm = TRUE)))
+
+avg_los
+
+
+```
+
+##### There is definite increase in avg length of stay with increase in r count. 
+
+
+```{r}
+
+# Plotting to check a linear relationship
+ggplot(avg_los, aes( x = rcount, y = avg_lengthofstay  )  ) + 
+  
+  geom_col( fill = "lightblue" ) +
+  
+  labs(x = "No. of readmissions ", y = "Average Length of Stay", title = "Average Length of Stay by Rcount") +
+  
+  theme_classic()
+
+
+```
+
+##### Positive trend is witnessed in between r count and length of stay
+
+
+```{r Pearson_rcount}
+
+# Pearson co-relation 
+cor( length_of_stay$rcount , length_of_stay$lengthofstay)
+
+```
+
+- Pearson co - relations reveals a strong positive co-relation value of 0.74.
+
+- Hence keeping it as numeric is justified as I want this ordinal nature of data to be preserved and captured by my model. 
+
+
+
+#### Gender to dummy encoding
+```{r dummy_gender}
+
+# Encoding gender variable
+length_of_stay$gender  = ifelse( length_of_stay$gender == "F" , 0 , 1 )
+
+
+# Converting to factor so that co-efficients can be estimated correctly
+length_of_stay$gender = factor( length_of_stay$gender  , levels = c( 0 , 1 ) )
+
+
+
+```
+
+
+
+```{r echo=FALSE}
+
+length_of_stay =  length_of_stay [ !names(length_of_stay) %in% c("eid" , "discharged" , "vdate" )]
+
+```
+
+
+
+- Column **eid** represents unique id of hospital admission and in my understanding does not impact length of stay of that patient. It can be used to uniquely identify a patient but since that is not the task in hand, its better to get rid of it.
+
+- Columns like **vdate and discharged** represent admission and discharge dates for the patient which information is captured by **length of stay variable** which is a difference of both these columns. Hence, I have decided to get rid of them as well.
+
+
+
+
+
+#### Facility ID variable
+```{r facid_encoding}
+
+# Distribution of variable
+prop.table(table( length_of_stay$facid ))*100
+
+
+# Creating dummies for facility id column
+length_of_stay$facid = ifelse(length_of_stay$facid == "A", 1,
+                                       
+                                       ifelse(length_of_stay$facid == "B", 2,
+                                              
+                                       ifelse(length_of_stay$facid == "C", 3,
+                                                     
+                                       ifelse(length_of_stay$facid == "D", 4,
+                                                            
+                                       ifelse(length_of_stay$facid == "E", 5, NA)))))
+
+
+# Converting to factor
+length_of_stay$facid = factor(length_of_stay$facid)
+
+```
+
+- Facilities A , B and E have 90% of patient admissions.
+
+- Facility ID variable records ID's of specific healthcare facilities where the patient was admitted.
+
+- Since quality of care provided at a healthcare facility can impact length of stay, have decided to keep this column.
+
+
+
+```{r echo=FALSE, re-arranging_columns_for_data_distribution }
+
+# Specifying the columns 
+front_cols = c(   seq(1,13) , 23,24 )
+
+# Creating new column order
+col_order = c( front_cols , setdiff( 1:ncol( length_of_stay ) , front_cols  ) )
+
+# Reordering the dataframe
+length_of_stay =  length_of_stay[ , col_order ]
+
+
+```
+
+
+### Data Visualization
+
+
+#### Visualizing distribution of categorical encoded variables
+```{r echo=FALSE}
+
+par(mfrow = c(2, 3))
+
+valid_indices = which(sapply(seq(1, 15), function(i) {
+  
+  count_table <- table(length_of_stay[[i]])
+  
+  length(count_table) > 0
+  
+}))
+
+invisible( lapply( valid_indices , function( i ) {
+  
+  col_name = names(length_of_stay)[i]
+  
+  count_table = table(length_of_stay[[i]] )
+  
+  par(mar = c(5, 5, 3 , 2) + 0.1)
+  
+  barplot(count_table, 
+          main = paste0("Distribution of ", col_name),
+          xlab = col_name,
+          ylab = "",  
+          col = "skyblue",
+          las = 2,  
+          ylim = c(0, max(count_table) * 1.1)) 
+  
+  mtext("Frequency", side = 2, line = 3.5, cex = 0.7)
+  
+  text(x = 1:length(count_table) - 0.5,  
+       y = count_table,
+       labels = count_table,
+       pos = 3 ,  
+       cex = 0.6 )  
+}))
+
+
+```
+
+
+- r count variable is dominated by 0 re - admissions.
+
+- Gender variable seems to have a balanced representation of males and females.
+
+- Rest of the columns showing distribution of asthma, iron deficiency, pneumonia etc. are imbalanced indicating most patients in the dataset do not suffer from these diseases.
+
+
+
+#### Visualizing distribution of continous variables
+```{r echo=FALSE}
+
+par(mfrow = c(2, 3))
+
+
+# Plotting histograms 
+for (i in seq(16, 25)) {
+  
+  hist(length_of_stay[[i]],
+       
+       main = paste0("Histogram of ", names(length_of_stay)[i]), 
+       
+       xlab = names(length_of_stay)[i], 
+       
+       col = "lightblue")
+}
+
+
+
+```
+
+
+- Some variables like neutrophils and blood urea nitro do not have a normal distribution while the rest seems to have a well defined bell shaped curve.
+
+- Columns like respiration and haematocrit have steep heights indicating extremely large values in the dataset that might represent outliers.
+
+
+
+#### Boxplot for outlier inspection
+```{r echo=FALSE}
+
+par(mfrow = c(2, 3))
+
+
+# Using a for loop to generate boxplots
+for (i in seq(16, 24)) {
+  
+  boxplot(length_of_stay[[i]], 
+          
+          main = paste0("Boxplot of ", names(length_of_stay)[i]),
+          
+          ylab = names(length_of_stay)[i], 
+          
+          col = "lightblue")
+}
+
+
+# Outlier trearment required
+
+```
+
+
+
+#### Train - test Split
+```{r}
+
+# Setting seed for reproducibility
+set.seed(1234)
+
+# Index for train test split
+index = createDataPartition( length_of_stay$lengthofstay , p = 0.70 , list = FALSE )
+
+# TRaining data
+train_data = length_of_stay[index , ]
+
+# Testing data
+test_data = length_of_stay[ - index , ]
+
+
+dim( train_data)
+
+dim( test_data )
+```
+
+### Model Building on basic data prep
+
+#### Building models and using them for baseline reference
+```{r}
+
+model = lm( lengthofstay ~. , data = train_data )
+
+
+summary(model)
+
+
+
+```
+
+- Most of the variables are significant except variables like sodium, bmi, pulse , glucose etc.
+
+- Our derived variables are also significant.
+
+- According to R square, `r paste0(round(summary(model)$r.squared * 100, 2), "%")` of the variance in our model can be explained by these predictors.
+
+
+#### Evaluation
+```{r}
+
+# Root Mean Square Error
+RMSE = sqrt(mean(((round(predict( model , test_data )) - test_data$lengthofstay ) ^ 2 )))
+RMSE
+
+```
+- RMSE of `r RMSE` means that, on average, the model's predictions are off by about 1.19 or 1 day.
+
+
+
+#### Building Step model 
+```{r , results = FALSE}
+
+step_model = step( model , train_data , direction = "backward" )
+
+```
+
+
+- **Starts with Full Model**: Begin with all predictor variables included.
+
+- **Iterative Process**: Remove one variable at a time in multiple steps.
+
+- **Evaluation**: At each step, checks the impact of removing a variable using criteria like AIC.
+
+- **Variable Removal**: Eliminate the variable that most improves the model by lowering AIC.
+
+- **Stopping Rule**: Continues until no more improvements are possible or a stopping criterion is reached.
+
+- **Final Model**: Ends with a simplified model containing only the most important variables.
+
+
+
+
+#### Evaluation
+```{r}
+
+RMSE_step = sqrt(mean(((round(predict( step_model , test_data)) - test_data$lengthofstay) ^ 2 ) ) )
+
+RMSE_step
+
+
+# Slight improvement in RMSE
+```
+
+- The AIC model has given 18 variables to be significant in comparison to 27 variables that were part of our training dataset.
+
+- The RMSE for this model is `r RMSE_step` which is a slight improvement from our basic L.R model which was `r RMSE`.
+
+
+
+
+
+#### Building Random Forest Model
+```{r warning=FALSE , message=FALSE}
+
+
+library(randomForest)
+
+before_prep_rf_model = randomForest( lengthofstay ~. , data = train_data , ntree = 10  )
+
+before_prep_rf_model
+
+
+
+# Evaluation
+before_prep_rmse_rf = sqrt(mean(((round(predict( before_prep_rf_model , test_data ) ) - test_data$lengthofstay) ^2 ) ) )
+
+before_prep_rmse_rf
+
+```
+
+- The random forest model is able to explain 88% variance in the dataset. This is a great improvement as compared to our linear regression model.
+
+- The reason can be attributed to facts like it being robust to outliers compared to L.R, has ability to capture non-linear relationships in dataset which cannot be done by L.R and random forest is itself an ensemble of decision trees which helps in reducing overfitting and generalizing better to unseen data.
+
+- The RMSE for random forest model is `r before_prep_rmse_rf`
+
+
+
+
+#### Building a gradient boosting model
+```{r , results = FALSE }
+
+set.seed(123)
+
+before_prep_gbm_model = train( lengthofstay ~ . ,  data = train_data   ,    method = "gbm"  )
+
+before_prep_gbm_model
+
+
+# Getting RMSE
+before_prep_gbm_rmse = sqrt(mean(((round(predict( before_prep_gbm_model , test_data )) - test_data$lengthofstay)^2)))
+
+before_prep_gbm_rmse
+
+
+
+
+```
+
+
+- The R squared values for gradient boosting model is `r paste0(round(before_prep_gbm_model$results[[6]][9] * 100  , 2 ) , " %")` which is an improvement from random forest as well which was 88 %.
+
+- GBM builds trees sequentially, where each tree attempts to correct the errors of the previous trees. This iterative process allows GBM to capture more complex patterns and interactions in the data, leading to better fitting of the training data and often improved performance on unseen data.
+
+- There is improvement in RMSE score as well which is `r before_prep_gbm_rmse`.
+
+
+
+
+
+
+# 2nd Iteration
+
+
+
+Below steps are aimed at doing extensive data prep and then creating the models and comparing there performance with above created models.
+
+### Feature Engineering
+
+#### Derived Feature - Flag for Weekday / Weekend patient got admitted on.
+```{r}
+
+# Converting to date datatype
+length_of_stay_copy$vdate =  as.Date( length_of_stay_copy$vdate  , format = "%m/%d/%Y" )
+
+
+
+# Creating a column recording weekday
+length_of_stay_copy$weekend =  weekdays( length_of_stay_copy$vdate )
+
+
+# One-hot encoding weekends as 1 and weekday as 0 
+length_of_stay_copy$weekend  = ifelse( length_of_stay_copy$weekend %in% c( "Saturday" , "Sunday") , 1 , 0 )
+
+
+
+# Converting to factor
+length_of_stay_copy$weekend = factor( length_of_stay_copy$weekend , levels =  c( 0 , 1 ) )
+
+
+
+```
+
+
+- The purpose behind creating this column is to look for patterns in weekend-weekday that might affect length of stay. 
+
+- For eg. things like staff occupancy / doctors on call availability on weekend or weekday can vary or number of tests that could be performed on a weekend as compared to a weekday can also vary.
+
+- Thus this column might be able to provide a new pattern to our training model.
+
+- In first iteration this column was dropped while in this it is retained and converted to a factor so that the co-efficient interpretation can help us assess the difference in avg length of stay on weekends as compared to weekdays.
+
+
+
+
+#### Derived Feature - Flag for Kidney Status
+```{r}
+
+# Creating a column that highlights kidney status
+length_of_stay_copy$kidney_status = ifelse(
+  
+  round(length_of_stay_copy$bloodureanitro / length_of_stay_copy$creatinine) < 10,  "Protein Deficiency", 
+  
+  ifelse( round(length_of_stay_copy$bloodureanitro / length_of_stay_copy$creatinine) > 20,  "Renal Impairment",  
+          
+          ifelse( round(length_of_stay_copy$bloodureanitro / length_of_stay_copy$creatinine) >= 10 & 
+                    
+                    round(length_of_stay_copy$bloodureanitro / length_of_stay_copy$creatinine) <= 20,  "Normal", NA )  ) )
+
+
+
+# Converting kidney status to a factor
+length_of_stay_copy$kidney_status = factor(length_of_stay_copy$kidney_status)
+
+
+
+# Normal being set as reference level
+length_of_stay_copy$kidney_status = factor(length_of_stay_copy$kidney_status, 
+                                            
+                                       levels = c("Normal", "Protein Deficiency", "Renal Impairment") )
+
+
+```
+
+- The ratio of Blood Urea Nitrogen to creatinine is a commonly used indicator in clinical settings to assess renal function.
+
+- State of kidney health is an important indicator that affects a patient's length of stay and reducing 2 columns to create a single column that stores the information as a flag also helps in simplifying the data for the model.
+
+- This new column will help in highlighting patterns related to renal health that affect patient outcomes.
+
+
+
+
+#### Derived feature - Co - Morbidity Index
+```{r}
+
+# Creating a column that sums all the conditions a patient has
+length_of_stay_copy$comorbidity_index = rowSums( length_of_stay_copy[ c ("asthma", "dialysisrenalendstage" ,"irondef", "pneum", "substancedependence", "psychologicaldisordermajor", "depress",  "psychother"  ,"fibrosisandother", "malnutrition", "hemo" ) ] )
+
+
+
+
+```
+
+
+
+- The total number of columns in my dataset is `r ncol( length_of_stay_copy )` which are significant in number and having all these columns can make the model training process quite complex.
+
+- 11 columns amongst these all record whether the patient upon admission was suffering from an underlying disease like asthma, substance abuse etc.
+
+- Creating Co - Morbidity Index column is with the purpose of firstly reducing such high - dimensionality of data and having one column that efficiently represents the information.
+
+- Now these columns that were involved in preparing this new feature will be eliminated to avoid multi-colliearity issues as well as high dimensionality issues.
+
+
+
+```{r echo=FALSE}
+
+length_of_stay_copy =  length_of_stay_copy [!names(length_of_stay_copy) %in% c("eid" , "discharged" , "vdate" , "asthma", "dialysisrenalendstage"
+                                                                               
+                              ,"irondef", "pneum", "substancedependence", "psychologicaldisordermajor", "depress",  "psychother"  ,"fibrosisandother",
+                              
+                              "malnutrition", "hemo","secondarydiagnosisnonicd9","bloodureanitro","creatinine")]
+
+
+
+```
+
+
+
+
+```{r echo=FALSE,dummy_gender_}
+
+# Encoding gender variable
+length_of_stay_copy$gender  = ifelse( length_of_stay_copy$gender == "F" , 0 , 1 )
+
+
+# Converting to factor
+length_of_stay_copy$gender = factor( length_of_stay_copy$gender  , levels = c(0 , 1 ) )
+
+```
+
+
+
+
+
+
+```{r echo=FALSE}
+
+# Distribution of re-admission variable
+table(length_of_stay_copy$rcount)
+
+# Converting to numeric
+length_of_stay_copy$rcount = as.numeric(stringr::str_replace_all( length_of_stay_copy$rcount , pattern = "\\+" , replacement = "" ) ) 
+
+```
+
+
+
+```{r echo=FALSE}
+
+# Distribution of variable
+table( length_of_stay_copy$facid )
+
+
+# Creating dummies for facility id column
+length_of_stay_copy$facid = ifelse(length_of_stay_copy$facid == "A", 1,
+                                       
+                                       ifelse(length_of_stay_copy$facid == "B", 2,
+                                              
+                                       ifelse(length_of_stay_copy$facid == "C", 3,
+                                                     
+                                       ifelse(length_of_stay_copy$facid == "D", 4,
+                                                            
+                                       ifelse(length_of_stay_copy$facid == "E", 5, NA)))))
+
+
+
+length_of_stay_copy$facid = factor(length_of_stay_copy$facid)
+
+```
+
+
+### Data preparation
+
+
+#### Introducing null values (NAs) randomly 
+```{r}
+
+
+
+# For reproducibility
+set.seed(123)
+
+# Introduce NAs in random positions
+na_indices_1 = sample( 1 :  nrow( length_of_stay_copy ) , size = 30 ) 
+
+na_indices_2 = sample( 1 :  nrow( length_of_stay_copy ) , size = 60 ) 
+
+na_indices_3 = sample( 1 :  nrow( length_of_stay_copy ) , size = 46 ) 
+
+
+# Choosing columns where missing values would be generated
+length_of_stay_copy[na_indices_1 ,  "hematocrit" ] = NA
+
+length_of_stay_copy[na_indices_2 ,  "pulse" ] = NA
+
+length_of_stay_copy[na_indices_3 ,  "bmi" ] = NA
+
+
+
+```
+
+
+
+```{r}
+
+# Chcecking for NULL values
+colSums(is.na(length_of_stay_copy ) )
+
+
+```
+
+#### Null value imputation
+```{r  Imputing NULL values with column median}
+
+# Creating a copy of dataset
+length_of_stay_copy = length_of_stay_copy
+
+
+# Function to replace NAs with column median (only for numeric columns)
+replace_na_with_median = function(x) {
+  
+  if (is.numeric(x)) {
+    
+    x[is.na(x)] = median(x, na.rm = TRUE)
+    
+  }
+  return(x)
+}
+
+# Applying the function to each column
+length_of_stay_copy = data.frame(lapply(length_of_stay_copy , replace_na_with_median) )
+
+# Checking again for NA values
+colSums(is.na(length_of_stay_copy ) )
+
+
+```
+
+
+
+
+```{r echo=FALSE }
+
+# Specifying the columns 
+front_cols = c(   1,2,10,12 , 13,14  )
+
+# Create the new column order
+col_order = c( front_cols , setdiff( 1:ncol( length_of_stay_copy ) , front_cols  ) )
+
+# Reorder the dataframe
+length_of_stay_copy =  length_of_stay_copy[ , col_order ]
+
+
+
+```
+
+
+
+#### Normality Check
+```{r }
+
+
+par(mfrow = c(2, 3))
+
+
+library(nortest)
+
+# Creating copy
+length_of_stay_clean = length_of_stay_copy
+
+
+# List to keep track of transformed columns
+transformed_columns <- vector()
+
+
+for (i in names(length_of_stay_copy[ seq( 7 , 13 ) ] ) ) {
+  
+  
+  # Anderson-Darling test for normality
+  anderson_test = ad.test(length_of_stay_copy[, i])
+  
+  
+  p = anderson_test$p.value
+  
+  
+  # SQRT transformation for making distribution normal
+  if (p < 0.05) {
+    
+    length_of_stay_clean[, i] = sqrt(length_of_stay_copy[, i] )
+    
+    transformed_columns <- c(transformed_columns, i )
+    
+    
+    # Plot histogram of the transformed column
+    
+    hist(length_of_stay_clean[, i], main = paste("Histogram of", i, "(SQRT Transformed)"),
+         
+         xlab = i, col = "lightblue" )
+  }
+}
+
+# Print the names of the columns that were transformed
+
+print("Columns that were transformed:")
+
+print(transformed_columns)
+
+
+
+```
+
+- The reason I chose **Anderson-Darling test for normality** is because of my sample size. Shapiro - wilk test works only if sample size is between 3 and 5000 and mine is 100k.
+
+- p value here gives probability for NULL Hypothesis being true and the hypothesis assumes data to be normally distributed, hence any p value less than 0.05 means data is not normally distributed and square root transformation is applied on it.
+
+- The reason for using sqrt transformation is because log transformation did not produce appropriate results.
+
+
+
+
+
+
+
+
+#### Standardization of data
+```{r Standardization}
+
+# Getting all numeric cols
+numeric_cols = names(length_of_stay_clean[ seq( 7 , 13 ) ] )
+
+
+# Confirming data types of the selected columns
+#sapply(length_of_stay_clean[numeric_cols], class )
+
+
+# Scaling the columns for standard distribution
+length_of_stay_clean[numeric_cols] = scale( length_of_stay_clean[numeric_cols] )
+
+
+
+```
+
+- Here scale function is used to standardize data to have a mean of 0 and a standard deviation of 1.
+
+- Linear regression assumes that the predictors (independent variables) are on a similar scale. If the predictors have vastly different scales, the coefficients might not accurately reflect the importance of each variable.
+
+- Hence standardization is necessary for accurate model training and performance.
+
+
+
+
+
+#### Checking for multi-collinearity
+```{r}
+
+# Filtering out only numeric and integer columns
+numeric_columns = length_of_stay_clean[ sapply( length_of_stay_clean , is.numeric ) ]
+
+# Correlation matrix
+cor_matrix = cor(numeric_columns, use = "complete.obs")
+
+cor_matrix
+
+
+```
+
+- **lengthofstay and rcount:**
+Correlation: 0.750. This is a strong positive correlation. A higher rcount is strongly associated with a longer length of stay.
+
+
+- **lengthofstay and comorbidity_index:**
+Correlation: 0.417. This is a moderate positive correlation. Higher comorbidity_index is moderately associated with a longer length of stay.
+
+- **lengthofstay and hematocrit:**
+Correlation: -0.079. This is a very weak negative correlation. A higher hematocrit is weakly associated with a shorter length of stay.
+
+- Correlation with other variables: Generally weak positive or negative correlations.
+
+- Thus I dont find features which are highly co-related with each other.
+
+
+
+
+#### For better visualization
+```{r echo=FALSE}
+
+library(psych)
+
+# Adjusting plotting parameters
+par(mfrow=c(1,1)) 
+
+par(mar=c(15, 15, 4, 2)) # Adjust margins (bottom, left, top, right)
+
+# Creating the correlation plot
+cor.plot(numeric_columns)
+
+```
+
+
+
+#### Outlier Removal
+```{r}
+
+
+# Duplicating length_of_stay_clean into length_of_stay_no
+length_of_stay_no = length_of_stay_clean
+
+
+# Logical vector to keep track of rows to keep
+rows_to_keep = rep(TRUE, nrow(length_of_stay_clean))
+
+
+# Vector to track columns with outliers
+columns_with_outliers = c()
+
+
+# For loop for outlier detection and removal
+for (i in names( length_of_stay_clean[ seq( 7 ,  13 ) ] ) )  {
+  
+  m = mean(length_of_stay_clean[, i])
+  
+  s = sd(length_of_stay_clean[, i])
+  
+  z = (length_of_stay_clean[, i] - m) / s
+  
+  # Checking if there are outliers in the current column
+  if (any( abs( z ) > 3 ) ) 
+    {
+    
+    columns_with_outliers = c(columns_with_outliers, i)
+ 
+   }
+  
+  rows_to_keep = rows_to_keep & (abs(z) <= 3)
+}
+
+
+# Overwriting length_of_stay_no created above to have no outliers
+length_of_stay_no = length_of_stay_clean[rows_to_keep,]
+
+
+# Number of rows before and after outlier removal
+original_rows = nrow(length_of_stay_clean)
+rows_after_removal = nrow(length_of_stay_no)
+
+
+print(paste("Number of rows before outlier removal: ", original_rows))
+
+print(paste("Number of rows after outlier removal: ", rows_after_removal))
+
+print("Columns with outliers:")
+
+print(columns_with_outliers)
+
+
+```
+
+
+- The number of outliers in this dataset are only `r paste0( round((original_rows - rows_after_removal) / original_rows * 100 ) , "%")`.
+
+- Considering this small percentage, I decided to remove outliers since there impact will not be significant.
+
+
+
+
+### Model Building on Clean dataset
+```{r echo=FALSE}
+
+set.seed(1234)
+
+index_1 =  createDataPartition(length_of_stay_no$lengthofstay  , p = 0.70 , list = FALSE)
+
+train_data_clean = length_of_stay_no[index_1 , ]
+
+test_data_clean = length_of_stay_no[ - index_1  , ]
+
+```
+
+
+
+#### LR Model built after data prep
+```{r}
+
+
+# Building LR model
+new_model = lm( lengthofstay ~. , data = train_data_clean )
+
+summary(new_model)
+
+
+# Getting RMSE
+RMSE_new_model = sqrt(mean(((round(predict( new_model , test_data_clean[-14] )) - test_data_clean$lengthofstay)^2 ) ) )
+
+
+```
+
+
+
+#### CV for L.R
+```{r}
+
+# For reproducibility
+set.seed(123) 
+
+# 50-fold cross-validation
+train_control = trainControl(method = "cv", number = 50)  
+
+# Creating LR model 
+cv_new_model = train( lengthofstay ~ . ,  data = train_data_clean,  method = "lm",  trControl = train_control )
+
+
+
+# Getting RMSE
+sqrt(mean(((round(predict( cv_new_model , test_data_clean[-14] )) - test_data_clean$lengthofstay)^2 ) ) ) 
+
+
+```
+
+
+
+- The R squared value for model after data prep is `r summary( new_model)$r.squared` while before doing data prep was `r summary(model)$r.squared` .
+
+- There is not a significant difference in R square value and RMSE. The model after data prep is making little less errors as compared to before.
+
+- The RMSE score for model with no data prep was `r RMSE` whereas now it is  `r sqrt(mean(((round(predict( new_model , test_data_clean[-14] )) - test_data_clean$lengthofstay)^2 ) ) ) `.
+
+- Cross fold cross validation has also nnot produced siginificant difference in results.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### Step model on new LR model
+```{r results= FALSE }
+
+step_new_model = step( new_model , train_data_clean , direction = "backward" )
+
+
+```
+
+
+
+#### Evaluation
+```{r}
+
+
+rmse_step_new_model = sqrt(mean((round(predict( step_new_model , test_data_clean)) - test_data_clean$lengthofstay)^2))
+
+rmse_step_new_model
+
+```
+
+- The RMSE for my step model with no data prep was `r RMSE_step` whereas the rmse score for this step model with data prep is `r rmse_step_new_model`. Since the RMSE has decreased slightly hence we can safely say that our new model has better fit compared to our previous model.
+
+
+
+#### Random Forest Model
+
+```{r}
+
+
+library(randomForest)
+
+
+rf = randomForest( lengthofstay ~. , data = train_data_clean , ntree = 10 )
+
+rf
+
+
+
+
+
+# Evalaution
+p = round(predict( rf , newdata = test_data_clean  ))
+
+#p
+
+# RMSE for random forest mdoel
+rmse_rf = sqrt(mean((p - test_data_clean$lengthofstay)^2))
+rmse_rf
+
+
+```
+
+
+
+
+
+
+
+#### Hyperparameter tuning for random forest model
+```{r results=FALSE}
+
+control = trainControl(method = "cv", number = 3 , verboseIter = TRUE)
+
+tunegrid = expand.grid(.mtry = c( 2 , 4 ))
+
+
+set.seed(1234)
+
+after_dataprep_rfmodel = train( train_data_clean , train_data_clean$lengthofstay  , 
+                  
+                  method = "rf", 
+                  
+                  trControl = control, 
+                  
+                  tuneGrid = tunegrid, 
+                  
+                  ntree = 50) 
+
+after_dataprep_rfmodel
+
+
+
+
+
+# RMSE 
+after_dataprep_rmse_rfmodel = sqrt(mean((round(predict( after_dataprep_rfmodel , test_data_clean )) - test_data_clean$lengthofstay)^2))
+
+after_dataprep_rmse_rfmodel
+
+
+```
+
+
+- **method** = "rf":
+This tells the train function to use the Random Forest algorithm for modeling.
+
+- **trControl** = control:
+control is where you specify how you want the training process to be controlled. In this case, it’s using cross-validation with 3 folds.
+
+- **tuneGrid** = tunegrid:
+tunegrid contains the hyperparameters you want to test. For Random Forest, the key parameter here is .mtry, which is the number of variables to try at each split in the trees.
+
+- **ntree** = 50:
+This specifies the number of trees to grow in the Random Forest. More trees usually mean better performance, but also more computation time.
+
+- **number** = 3 in trainControl:
+This sets up 3-fold cross-validation, meaning the data is split into 3 parts, and the model is trained and validated 3 times, each time with a different part as the validation set and the other two as training sets.
+
+- **verboseIter** = TRUE in trainControl:
+This makes the process print out progress updates as it trains the model, so you can see how it’s doing.
+
+
+
+**Hyperparameter tuning has delivered a better random forest model as compared to a simple random forest model.**
+
+
+
+
+
+#### Gradient Boosting
+```{r results='hide'}
+
+library(caret)
+
+# Define the control parameters for training
+control = trainControl(method = "cv", number = 3, verboseIter = TRUE)  # Fewer folds
+
+# Define a reduced grid of hyperparameters to tune
+tunegrid = expand.grid(
+  .n.trees = c(10, 50),               # trees
+  
+  .interaction.depth = c(1, 3),        # depth levels
+  
+  .shrinkage = c(0.01, 0.1),           # learning rates
+  
+  .n.minobsinnode = c(10, 20)          # minimum observations
+  
+)
+
+# Training the model using the specified hyperparameters
+set.seed(1234)
+
+gbmmodel = train( lengthofstay ~ ., data = train_data_clean, method = "gbm", trControl = control, tuneGrid = tunegrid, verbose = FALSE  )
+
+
+
+
+rmse_GBM_model = sqrt(mean((round(predict( gbmmodel , test_data_clean )) - test_data_clean$lengthofstay)^2))
+
+rmse_GBM_model
+
+
+# RMSE for gradient boosting model is more than for random forest model
+
+
+
+```
+
+
+#### RMSE and R square for models built so far
+```{r echo=FALSE}
+
+library(knitr)
+
+# Df created
+df = data.frame(
+  Basic_LR_model = c(RMSE, summary(model)$r.squared),
+  Basic_Step_model = c(RMSE_step, summary(step_model)$r.squared),
+  Basic_RF_model = c(rmse_rf, 0.88),
+  Basic_GBM_model = c(before_prep_gbm_rmse, before_prep_gbm_rmse),
+  Data_prep_LR_model = c(RMSE_new_model, summary(new_model)$r.squared),
+  Data_prep_Step_model = c(rmse_step_new_model, summary(step_new_model)$r.squared),
+  Data_prep_RF_model = c(after_dataprep_rmse_rfmodel, 0.99),
+  Data_prep_GBM_model = c(rmse_GBM_model, gbmmodel$results[[6]][16]),
+  row.names = c("RMSE", "R squared ")
+)
+
+df
+
+# Display the initial table with kable
+kable(as.data.frame(df), caption = "Model Performance Metrics", digits = 3)
+
+```
+
+
+
+
+
+# 3rd Iteration
+
+
+### Principal Component Analysis
+```{r warning=FALSE , message=FALSE }
+
+# Installing Packages
+# install.packages("MASS")
+# install.packages("factoextra")
+
+
+# Loading Libraries 
+library(MASS) 
+library(factoextra)
+library(ggplot2)
+
+```
+
+
+```{r echo=FALSE}
+
+# Identify columns that are factors
+factor_columns = sapply(length_of_stay_no , is.factor)
+
+# New df
+length_of_stay_clean_numeric = length_of_stay_no
+
+# Encoding for kidney status column
+length_of_stay_no$kidney_status  = ifelse( length_of_stay_no$kidney_status == "Normal" , 0 , ifelse( length_of_stay_no$kidney_status == "Protein Deficiency" , 1 , 2 ))
+
+# Factoring with normal as reference
+length_of_stay_no$kidney_status =  factor( length_of_stay_no$kidney_status , levels = c(0,1,2 ) )
+
+# Convert factor columns to numeric using lapply
+length_of_stay_clean_numeric[factor_columns] = lapply(length_of_stay_no[factor_columns], function(x) as.numeric(as.character(x)))
+
+# Check the structure of the resulting dataframe to confirm conversion
+str(length_of_stay_clean_numeric)
+
+
+
+
+
+
+```
+
+
+
+
+```{r}
+
+# Getting PCA
+pca_result = prcomp(length_of_stay_clean_numeric  )
+
+# summary
+summary( pca_result)
+
+
+# Building df that stores new feature values
+pca_data = as.data.frame(pca_result$x)
+
+
+```
+- We have got 9 components that can explain upto 91% variance in data
+
+
+
+
+```{r}
+
+
+# Scree Plot of Variance 
+fviz_eig( pca_result ,  addlabels = TRUE, ylim = c( 0 , 70  ) )
+
+
+
+
+```
+
+
+
+
+
+
+
+```{r}
+
+# For reproducibility
+set.seed(123)  
+
+trainIndex = createDataPartition( length_of_stay_clean_numeric$lengthofstay , p = .7, 
+                                  
+                                  list = FALSE,  times = 1)
+
+trainData = pca_data[trainIndex, ]
+
+testData = pca_data[-trainIndex, ]
+
+trainTarget = length_of_stay_clean_numeric$lengthofstay[trainIndex]
+
+
+testTarget = length_of_stay_clean_numeric$lengthofstay[-trainIndex]
+
+
+
+```
+
+
+
+
+
+
+#### Building Linear Regression Model
+```{r}
+
+
+# Getting 9 components
+num_components = 9   
+
+pca_features_train = trainData[, 1:num_components]
+
+pca_features_test = testData[, 1:num_components]
+
+# Fit the model
+pca_lr_model = lm( trainTarget ~ ., data = data.frame(trainTarget, pca_features_train) )
+
+# Summarize the model
+summary(pca_lr_model)
+
+
+
+
+
+
+# Predict on the test set
+predictions = predict( pca_lr_model , newdata = data.frame( pca_features_test ) )
+
+# Calculate performance metrics
+rmse_pca_lr_model = sqrt(mean((predictions - testTarget)^2))
+rmse_pca_lr_model
+
+
+
+
+r_squared = cor(predictions, testTarget)^2
+
+cat("RMSE: ", rmse_pca_lr_model, "\n")
+cat("R-squared: ", r_squared, "\n")
+
+
+
+
+
+
+
+```
+
+- After performing PCA Linear Regression models have shown tremendous improvement. These L.R models can explain `r paste0(round(r_squared*100,2) , " %")` variance in the dataset and there RMSE is `r paste0(round(r_squared*100,2) , " %")` which is again improved compared to L.R models involving data prep.
+
+- PCA transforms the original features into a set of linearly uncorrelated components. This reduces multicollinearity, which can be a problem for linear regression models. Multicollinearity can inflate the variance of the coefficient estimates and make the model unstable. This I think can be a reason behind drastic improvement in L.R model performance.
+
+
+
+
+#### Building Step Model
+```{r}
+
+pca_step_model =  step( pca_lr_model , data = data.frame(trainTarget, pca_features_train) , direction = "backward" )
+
+
+# Getting predictions
+predictions_step = predict( pca_step_model , newdata = data.frame( pca_features_test ) )
+
+
+# Evaluation
+rmse_pca_step_model =  sqrt(mean((predictions_step - testTarget)^2))
+
+rmse_pca_step_model
+
+
+# R-squared
+r_square_step =  cor( predictions_step, testTarget)^2
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+#### Building Random Forest Model
+```{r}
+
+# Loading necessary libraries
+library(randomForest)
+
+
+
+
+# Train the model
+pca_rf_model = randomForest( trainTarget ~ ., data = data.frame(trainTarget, pca_features_train) , ntree = 10)
+
+# Summary of the model
+print(pca_rf_model)
+
+
+predictions_rf = predict( pca_rf_model , newdata = data.frame( pca_features_test ) )
+
+
+# R squared
+r_square_rf =  cor( predictions_rf, testTarget)^2
+r_square_rf
+
+
+
+# Evaluation
+rmse_pca_rf_model = sqrt(mean((predictions_rf - testTarget)^2))
+
+rmse_pca_rf_model
+
+```
+
+
+
+
+
+#### Building gradient boosting model
+```{r results='hide'}
+
+library(caret)
+
+# Define the control parameters for training
+control = trainControl(method = "cv", number = 3, verboseIter = TRUE)  
+
+
+
+# Define a reduced grid of hyperparameters to tune
+tunegrid = expand.grid( n.trees = c(10, 50) , interaction.depth = c(1, 3), n.minobsinnode = c(10, 20) , shrinkage = c(0.01, 0.1)  )
+
+
+
+# Train the model using the specified hyperparameters
+set.seed(1234)
+
+
+gbm_model_pca = train( trainTarget ~ ., data = data.frame(trainTarget, pca_features_train) , method = "gbm", trControl = control, tuneGrid = tunegrid, verbose = FALSE )
+
+
+
+# Getting predictions
+predictions_gbm = predict( gbm_model_pca , newdata = data.frame( pca_features_test ) )
+
+
+rmse_GBM_PCA_model = sqrt(mean((predictions_gbm - testTarget)^2))
+
+rmse_GBM_PCA_model
+
+
+
+# R squared
+r_square_gbm =  cor( predictions_gbm, testTarget)^2
+
+
+```
+
+
+
+
+
+
+```{r echo=FALSE}
+
+library(knitr)
+
+df = as.data.frame(df)
+
+# Adding new columns
+df$pca_LR_model = c(rmse_pca_lr_model, r_squared)
+df$pca_Step_model = c(rmse_pca_step_model, r_square_step)
+df$pca_RF_model = c(rmse_pca_rf_model, r_square_rf)
+df$GBM_PCA_model = c(rmse_GBM_PCA_model, r_square_gbm)
+
+
+
+# Display the updated table with kable
+kable(t(df), caption = "Updated Model Performance Metrics", digits = 3)
+
+
+```
+
+Random Forest Models in all scenarios have performed better than Linear Regression, Step as well as Gradient Boosting models.
+
+
+
+### Ensemble Model 
+```{r}
+
+# Creating ensemble
+ensemble_models = function( test_data_clean ,  target_var , lm_model , rf_model , gbm_model , weights )  {
+  
+
+  
+  # Using my best models based on R square and RMSE
+  pred_lm = predict(new_model, newdata = test_data_clean)
+  
+  pred_rf = predict(after_dataprep_rfmodel, newdata = test_data_clean)
+  
+  pred_gbm = predict(gbmmodel, newdata = test_data_clean)
+  
+  
+  # Assigning weights as random forest and gbm model perform better than linear regression
+  final_predictions = (weights[1] * pred_lm + weights[2] * pred_rf + weights[3] * pred_gbm) / sum(weights)
+  
+  
+  # Getting rnse and r square
+  final_rmse = sqrt(mean((final_predictions - test_data_clean[[target_var]])^2))
+  
+  final_r_squared = cor(final_predictions, test_data_clean[[target_var]])^2
+  
+  list(final_rmse = final_rmse, final_r_squared = final_r_squared )
+  
+  
+}
+
+# Assigning weights
+weights = c(0.2, 0.6, 0.4)
+
+result = ensemble_models(test_data_clean, "lengthofstay", lm_model, rf_model, gbm_model, weights)
+
+print(result)
+
+
+```
+# Observations
+
+- Assigning ***weights*** to my ensemble has given me a **RMSE** score of **0.46** i.e model has a very ***low predictive error*** for length of stay.
+
+- The **RMSE** score for this ***ensemble*** is **96%** i.e a lot of variance is explained by this ensemble model.
+
+- Comparing to models where no data prep was done, ensemble has performed significantly better in both metrics.
+
+- Comparing to models where **data prep** was involved, ***tuned random forest*** have performed the **best** compared to ensembles. One reason for ensemble not performing better is because of ***Linear Regression*** model not giving high predictions as it is **dependent** on **linear relationships** in data whereas tuned random foresrt models can capture non-linear trend can become better learners.
+
+- ***Gradient Boosting*** models being an ensemble have also performed great in all iterations though less accurate than randon forest. May be hyperparameter tuning of gradient boosting models can be performed better to achieve similar or better results as compared to decision trees.
+
+- Linear Regression and Step models have performed great on **PCA data** and that is because PCA produced un-corelated components with **minimal multi- coliiearity** and that helped these models understand patterns during train and generalize well on test set.
+
+- Other ensembles produced great on PCA as well mostly because dimensionality got reduced.
+
+- **Linear Regression and Step-wise AIC:**
+Both models perform significantly better after PCA transformation, indicating that reducing dimensionality helps in capturing the underlying patterns better.Data prep slightly improves performance compared to the basic models, but PCA transformation shows a substantial improvement.
+
+- **Random Forest:**
+Random Forest shows a marked improvement with data preparation and even better performance with PCA. The low RMSE and high R-squared values for the data prep and PCA models indicate these techniques greatly enhance the model's performance.
+
+- **Gradient Boosting:**
+Gradient Boosting performs best with the basic model and PCA model compared to the data prep model. The PCA transformation also benefits Gradient Boosting, although not as dramatically as Random Forest.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
