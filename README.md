@@ -3,6 +3,10 @@
 ## 📌 Project Overview  
 This project predicts **Length of Stay (LOS)** for hospital patients using healthcare metrics like re-admission counts, glucose levels, and kidney function. The goal is to optimize resource allocation and improve patient care by anticipating hospitalization duration. The dataset includes 100k+ patient records with 27+ features.
 
+![modern-hospital-machinery-illuminates-blue-mri-scanner-generated-by-ai](https://github.com/user-attachments/assets/ed6d1f7e-74ce-4044-8362-805c357d25e3)
+
+
+
 ---
 
 ## 🛠️ Tools & Techniques  
